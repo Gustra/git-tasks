@@ -1,0 +1,41 @@
+@startuml
+
+abstract class Backend {
+    authenticate()
+    get_tasks(List tasks)
+    get_my_tasks()
+}
+
+class Backend::Github {
+}
+
+class Backend::Tuleap {
+}
+
+class Backend::Jira {
+}
+
+abstract class Chatops {
+}
+
+class Errbot {
+}
+
+class Gittasks {
+    activate_task(String task):
+    deactivate_task(String task, Boolean force)
+    get_status(List tasks)
+    list_my_tasks(List backends)
+    set_status(String status)
+    deactivate_closed(Boolean force)
+}
+
+Gittasks --> Backend
+Gittasks --> Chatops
+Backend <|-- Backend::Github
+Backend <|-- Backend::Jira
+Backend <|-- Backend::Tuleap
+
+Chatops <|-- Errbot
+
+@enduml

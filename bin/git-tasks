@@ -1,0 +1,594 @@
+#!/usr/bin/env python
+
+"""
+NAME
+
+    git-tasks - manage tasks connected to ticket systems
+
+SYNOPSIS
+
+    git-tasks [<options>] list [<branch>]
+    git-tasks [<options>] start <branch>
+    git-tasks [<options>] status
+    git-tasks { --help | --man-page }
+
+DESCRIPTION
+
+    git-tasks manages branches connected to tracker/ticker systems. Tasks
+    can be created, listed and deleted. A line with the task information is
+    inserted into the prepared commit message when a commit is created.
+
+  Commands
+
+  get-message-line
+
+    Print a line suitable to add to a commit message
+
+  list
+
+    List all branches recognized as task branches in this repository
+
+  start <name>
+
+    Create and switch to the branch <name>. The upstream will be set to
+    "origin/master" (this behavior will be configurable in a future release).
+
+  status
+
+    List task branches and the status and title of the associated tasks in
+    the format:
+
+    <branch> (<status): <title>
+
+    If a task cannot be downloaded to
+
+OPTIONS
+
+    TBD
+
+VARIABLES
+
+    GIT_TASKS_CONFIG_FILE
+
+        Path to the configuration file to use. Overrides
+        ~/.git-tasks/config.yml
+
+SEE ALSO
+
+    -
+"""
+
+from __future__ import print_function
+import argparse
+from git import Repo
+import github
+import logging
+import os
+import re
+import shutil
+import sys
+import yaml
+from subprocess import check_output
+
+
+class NotFoundError(Exception):
+    """Task not found in Backend"""
+
+
+class NoSuchTaskError(Exception):
+    """Task name was not matched against patterns"""
+
+
+class Task(object):
+    """
+    Class representing a task/issue/ticket.
+    """
+
+    def __init__(self, branch, backend, data):
+        """
+        Constructor.
+        :param task_id: backend-specific identity
+        :param backend: backend object handling this task
+        :param kwargs: status, assignee, subject
+        """
+        self.branch = branch
+        self.backend = backend
+        if data:
+            self.id = data['id'] if 'id' in data else ''
+            self.status = data['status'] if 'status' in data else ''
+            self.assignee = data['assignee'] if 'assignee' in data else ''
+            self.title = data['title'] if 'title' in data else ''
+        else:
+            self.id = ''
+            self.status = ''
+            self.assignee = ''
+            self.title = ''
+
+        self.task = None
+
+    def set_status(self, status):
+        """
+        Change the status for this task.
+        :param status: new status
+        :return: True if set was completed, False if set is not supported
+                 for this backend, else Exception if set failed
+        """
+        self.backend.set_task_status(self, status)
+
+    def populate(self):
+        """
+        Populates this task object with data from the backend.
+        :return: task dict or None if data is not available
+        """
+        task = self.backend.get_backend_task(self.id)
+        if not task:
+            return None
+        self.id = task['id'] if 'id' in task else ''
+        self.status = task['status'] if 'status' in task else ''
+        self.assignee = task['assignee'] if 'assignee' in task else ''
+        self.title = task['title'] if 'title' in task else ''
+        self.task = task
+        return task
+
+    def to_string(self):
+        """
+        Return the id as a string.
+        :return: string representation of the id
+        """
+        return 'task #{}'.format(self.id)
+
+    def get_title(self):
+        """Return the task title if found, else None"""
+        if self.title:
+            return self.title
+        try:
+            if self.populate():
+                return self.title
+        except NotFoundError:
+            return None
+
+    def get_status(self):
+        """Return the status/state if found, else None"""
+        if self.status:
+            return self.status
+        try:
+            if self.populate():
+                return self.status
+        except NotFoundError:
+            return None
+
+
+class GenericTask(Task):
+    def to_string(self):
+        """
+        Returns a human-readable string for this task, suitable to put in a
+        commit message.
+        :return: string
+        """
+        logging.debug('ENTER GenericTask.to_string()')
+        if self.id:
+            logging.debug('Id %s found', self.id)
+            return 'generic #{}'.format(self.id)
+        else:
+            logging.debug('No id for this task')
+            return self.branch
+
+
+class GithubTask(Task):
+    def to_string(self):
+        """
+        Returns a human-readable string for this task, suitable to put in a
+        commit message.
+        :return: string
+        """
+        logging.debug('ENTER GithubTask.to_string()')
+        if self.id:
+            logging.debug('Id %s found', self.id)
+            return 'issue #{}'.format(self.id)
+        else:
+            logging.debug('No id for this task')
+            return self.branch
+
+
+class Backend(object):
+    """
+    Base class for all backend types.
+    """
+
+    def __init__(self, **config):
+        """
+        Constructor for backends.
+        :param config: backend-specific configuration dict
+        """
+        self.config = config
+        if 'patterns' in config and config['patterns']:
+            self.patterns = config['patterns']
+        else:
+            self.patterns = []
+
+    def authenticate(self, credentials=None):
+        """
+        Authenticate a connection to this backend.
+        :param credentials: object with credentials for this type of backend
+        :return: True if connection is authenticated, else False
+        """
+        # Not default authentication
+        return True
+
+    def get_backend_task(self, task_id):
+        """
+        Lookup the task in the backend and return a dict of data.
+        :param task_id: backend-specific id of the task
+        :return:
+        """
+        return None
+
+    def get_task(self, name):
+        """
+        Returns the task object for the given name is the name is a task in
+        this system, else None.
+        this backend.
+        :param name: string to test
+        :return: Task object
+        """
+        return None
+
+    def get_tasks(self, names):
+        """
+        Returns Task objects for the names which matches a task branch for
+        this backend.
+        :param names: string or list of strings to test
+        :return: Task object
+        """
+        return None
+
+    def list_tasks(self, **filter):
+        """
+        List tasks in this backend which matches the given filter.
+
+        The filter may be backend-specific, but shall at least support the
+        following keys: status, assignee, subject, description
+        :param filter:
+        :return: list of matching tasks
+        """
+        return []
+
+    def set_task_status(self, task, status):
+        """
+        Update the status for the task
+        :param task:
+        :param status:
+        :return:
+        """
+        pass
+
+    def is_issue(self, name):
+        """
+        Try to match the given branch name to this backend
+        :param name: string to match against
+        :return: True if there is a match else False
+        """
+        for pattern in self.patterns:
+            if re.match(pattern, name):
+                return True
+        return False
+
+
+class Github(Backend):
+    def __init__(self, **config):
+        super(Github, self).__init__(**config)
+        self.token = None
+        if not self.patterns:
+            self.patterns = ['issue-\d+$']
+        self.repository = None
+        self.credentials = None
+        self.repository = None
+
+        try:
+            logging.debug('Reading credentials file %s',
+                          config['credentials-file'])
+            with open(config['credentials-file']) as fp:
+                self.credentials = yaml.load(fp)
+                self.github = github.Github(self.credentials['user'],
+                                            self.credentials['password'])
+                self.repository = \
+                    self.github.get_repo(config['our']['repository'])
+        except KeyError:
+            pass
+
+    def get_task(self, name):
+        """
+        Return the task object for the given task name.
+        :param name: task name
+        :return: Task object or None if the task does not exist
+        """
+        if not self.is_issue(name):
+            raise NoSuchTaskError('{} did not match the'
+                                  ' task pattern'.format(name))
+        if not self.repository:
+            return GithubTask(name, self, {})
+        issue_id = int(name.split('-')[1])
+        logging.debug('Fetching data for issue %d', issue_id)
+        try:
+            github_data = self.repository.get_issue(issue_id)
+            task_data = {
+                'assignee': github_data.assignee,
+                'id': github_data.number,
+                'title': github_data.title,
+                'status': github_data.state,
+                'url': github_data.url,
+            }
+        except github.GithubException:
+            task_data = {
+                'id': issue_id,
+            }
+
+        return GithubTask(name, self, task_data)
+
+
+class Generic(Backend):
+    """Class for interfacing any task system through an external program."""
+
+    def __init__(self, **config):
+        super(Generic, self).__init__(**config)
+        if not self.patterns:
+            self.patterns = ['task-([0-9]+)$']
+        self.command = None
+        try:
+            self.command = config['our']['command']
+        except KeyError:
+            pass
+
+    def get_task(self, name):
+        """
+        Return a Task object if name is a task in this backend.
+        :param name:
+        :return: Task object
+        :raises: NoSuchTaskError if the name is not a task in this backend
+        """
+        if not self.is_issue(name):
+            raise NoSuchTaskError('{} did not match the'
+                                  ' task pattern'.format(name))
+        if not self.command:
+            logging.debug('Command not set')
+            return GenericTask(name, self)
+        return GenericTask(name, self, yaml.load(check_output([self.command,
+                                                               'get-task',
+                                                               name])))
+
+
+class Config:
+    """
+    Configuration file class
+    """
+
+    def __init__(self, config_file=None):
+        self.systems = []
+        if not config_file:
+            if os.getenv('GIT_TASKS_CONFIG_FILE', ''):
+                config_file = os.getenv('GIT_TASKS_CONFIG_FILE')
+            elif os.path.exists('~/.git-tasks/config.yml'):
+                config_file = '~/.git-tasks/config.yml'
+        if config_file:
+            with open(config_file) as fp:
+                self.config = yaml.load(fp)
+                if not self.config:
+                    raise Exception('Failed to load config file'
+                                    ' {}'.format(config_file))
+                # Create supported systems
+                if 'systems' in self.config:
+                    supported = {'generic': Generic,
+                                 'github': Github}
+                    for data in self.config['systems']:
+                        if data['type'] not in supported:
+                            continue
+                        self.systems.append(supported[data['type']](**data))
+        else:
+            self.config = {}
+
+
+class Gittasks(object):
+    def __init__(self):
+        """
+        Parse command-line arguments.
+        :return: arguments object
+        """
+        self.config = {}
+
+        p = argparse.ArgumentParser(
+            description="Issue/task/issue manager for git", )
+
+        p.add_argument('--config-file',
+                       help='configuration file', )
+        p.add_argument('--debug',
+                       action='store_true',
+                       help='Print debug messages', )
+        p.add_argument('--man-page',
+                       action='store_true',
+                       help='Show manual page', )
+        p.add_argument('--verbose',
+                       action='store_true',
+                       help='Print information messages', )
+
+        subparsers = p.add_subparsers(help='command to run')
+
+        sp = subparsers.add_parser('clean',
+                                   help='Remove merged task branches')
+        sp.set_defaults(func=self.clean)
+
+        sp = subparsers.add_parser('get-message-line',
+                                   help='Print line to add to commit message')
+        sp.add_argument('id',
+                        nargs='?',
+                        default='',
+                        help='Task id, e.g. JIRA-1234, tuleap-52')
+        sp.set_defaults(func=self.get_message_line)
+
+        sp = subparsers.add_parser('list',
+                                   help='Print status of all tasks')
+        sp.set_defaults(func=self.list)
+
+        sp = subparsers.add_parser('start',
+                                   help='Create or switch to a task branch')
+        sp.add_argument('id', help='Task id, e.g. JIRA-1234, tuleap-52')
+        sp.set_defaults(func=self.start)
+
+        sp = subparsers.add_parser('status',
+                                   help='List status for tasks')
+        sp.add_argument('--current',
+                        default='',
+                        help='Show status for current task')
+        sp.add_argument('id',
+                        nargs='?',
+                        default='',
+                        help='Task id, e.g. JIRA-1234, tuleap-52')
+        sp.set_defaults(func=self.status)
+
+        args = p.parse_args()
+
+        if args.debug:
+            logging.basicConfig(level=logging.DEBUG)
+        elif args.verbose:
+            logging.basicConfig(level=logging.INFO)
+        else:
+            logging.basicConfig(level=logging.ERROR)
+
+        logging.debug('Arguments: %s', args)
+
+        self.repo = Repo(search_parent_directories=True)
+
+        self.config = Config(args.config_file)
+
+        # use dispatch pattern to invoke method with same name
+        args.func(args)
+
+    def _install_hook(self):
+        dest = os.path.join(self.repo.git_dir, 'hooks', 'prepare-commit-msg')
+        src = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                           'hooks', 'prepare-commit-msg')
+        if not os.path.exists(dest):
+            print('Installing missing commit message hook.')
+            shutil.copy(src, dest)
+
+    def clean(self, args):
+        pass
+
+    def start(self, args):
+
+        self._install_hook()
+
+        if args.id in self.repo.heads:
+            print('Switching to task {}'.format(args.id))
+            self.repo.heads[args.id].checkout()
+        else:
+            print('Creating branch and starting task {}'.format(args.id))
+            upstream = self.config['default-upstream'] \
+                if 'default-upstream' in self.config.config \
+                else 'origin/master'
+            if upstream in self.repo.references \
+                    or 'remotes/' + upstream in self.repo.references:
+                print('Setting upstream to {}'.format(upstream))
+                self.repo.git.checkout(upstream, b=args.id)
+                self.repo.git.branch(set_upstream_to=upstream)
+            else:
+                print(
+                    'Not setting upstream {} since it does not exist'.format(
+                        upstream))
+                self.repo.git.checkout('-b', args.id)
+
+    def list(self, args):
+        """
+        List all tasks in this repository.
+        :param args:
+        :return:
+        """
+
+        # TODO handle multiple system matches
+
+        branches = self.repo.heads
+        tasks = []
+        for ref in branches:
+            for system in self.config.systems:
+                if system.is_issue(ref.name):
+                    tasks.append(ref.name)
+                    break
+        for name in sorted(tasks):
+            print(name)
+
+    def get_task_from_name(self, name):
+        """
+        Return the current task, if there is a match
+        :return: Task object or None
+        """
+        # TODO handle multiple matches
+
+        for system in self.config.systems:
+            if system.is_issue(name):
+                return system.get_task(name)
+        return None
+
+    def get_message_line(self, args):
+        """
+        Print the line to add to the commit message.
+        :return:
+        """
+        #
+        # Determine current branch
+        #
+        logging.debug('ENTER get_message_line')
+        try:
+            if args.id:
+                ref = args.id
+            else:
+                logging.debug('Getting active branch')
+                ref = self.repo.active_branch
+                if not ref:
+                    print('No active branch')
+                    exit(0)
+                ref = ref.name
+            logging.debug('Using branch %s', ref)
+            task = self.get_task_from_name(ref)
+            logging.debug('Task found for name %s: %s', ref, task)
+            if task:
+                if task.title:
+                    logging.debug('Title {} set'.format(task.title))
+                    print('{} {}'.format(task.to_string(),
+                                         task.get_title()))
+                else:
+                    logging.debug('No title set')
+                    logging.debug('Message line: %s', task.to_string())
+                    print(task.to_string())
+                    logging.debug('Print complete')
+        except Exception as e:
+            logging.debug('Exception occurred: %s', e)
+            print(e, file=sys.stderr)
+            exit(1)
+
+    def status(self, args):
+        """
+        Print status of all tasks in this repository.
+        :param args:
+        :return:
+        """
+
+        # TODO handle multiple system matches
+
+        branches = self.repo.heads
+        tasks = []
+        for ref in branches:
+            for system in self.config.systems:
+                if system.is_issue(ref.name):
+                    tasks.append(system.get_task(ref.name))
+        if tasks:
+            for task in sorted(tasks):
+                status = task.get_status() if task.get_status() is not None \
+                    else ''
+                title = task.get_title() if task.get_title() is not None \
+                    else ''
+                print('{} ({}): {}'.format(task.branch, status, title))
+        else:
+            print('No tasks started.')
+
+
+if __name__ == '__main__':
+    Gittasks()

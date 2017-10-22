@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+case $1 in
+  create) exit 0;;
+
+  set-state) exit ${FAKE_STATUS:-0};;
+
+  get-state) echo "${FAKE_STATE-}"; exit ${FAKE_STATUS:-0};;
+
+  get-title) echo "${FAKE_TITLE-}"; exit ${FAKE_STATUS:-0};;
+
+  get-task) echo "${FAKE_TASK-}"; exit ${FAKE_STATUS:-0};;
+
+  *)
+    echo "Error: unknown command $1"
+    exit 1;;
+esac
+

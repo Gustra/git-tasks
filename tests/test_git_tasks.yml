@@ -1,0 +1,6 @@
+systems:
+  - name: Github
+    type: github
+    project: git-tasks
+    patterns:
+      - issue-\d+$

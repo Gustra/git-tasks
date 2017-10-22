@@ -1,0 +1,48 @@
+#!/usr/bin/env python
+"""
+NAME
+
+    prepare-commit-msg
+
+DESCRIPTION
+
+    Run by git to prepare a commit message. Adds a line with the current
+    issue, if the branch is associated with an issue.
+"""
+from __future__ import print_function
+
+from os import getenv
+from subprocess import check_output, STDOUT
+
+import sys
+
+message_line = ''
+try:
+    message_line = check_output(['git-tasks', 'get-message-line']).rstrip()
+except:
+    if getenv('GIT_TASKS_DEBUG', ''):
+        raise
+    exit(0)
+
+if not message_line:
+    exit(0)
+
+try:
+    with open(sys.argv[1]) as fp:
+        lines = fp.read().splitlines(True)
+    if message_line + '\n' not in lines:
+        lines = ['\n\n' + message_line + '\n\n'] + lines
+    with open(sys.argv[1], 'w') as fp:
+        fp.write(''.join(lines))
+    exit(0)
+
+except Exception as e:
+    # It is not possible to retrieve the output from the check_output()
+    # command above if the command exits with a non-zero status. To see
+    # what is happening, uncomment the line below and run the above
+    # command in the xterm window.
+    # check_output(['xterm'])
+    print(e)
+    exit(2)
+
+exit(0)
