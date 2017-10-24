@@ -20,6 +20,12 @@ DESCRIPTION
 
   Commands
 
+  clean [--dry-run]
+
+    Remove task branches which are already part of the currently checked out
+    history. "--dry-run" shows which branches would be deleted without
+    actually deleting them
+
   get-message-line
 
     Print a line suitable to add to a commit message
@@ -414,6 +420,9 @@ class Gittasks(object):
 
         sp = subparsers.add_parser('clean',
                                    help='Remove merged task branches')
+        sp.add_argument('--dry-run',
+                        action='store_true',
+                        help='Show which branches would be deleted')
         sp.set_defaults(func=self.clean)
 
         sp = subparsers.add_parser('get-message-line',
@@ -470,8 +479,32 @@ class Gittasks(object):
             print('Installing missing commit message hook.')
             shutil.copy(src, dest)
 
+    def is_task(self, name):
+        """
+        Test if name is a task
+        :param name: string to test
+        :return: True if name is a task, else False
+        """
+        for system in self.config.systems:
+            if system.is_issue(name):
+                return True
+        return False
+
     def clean(self, args):
-        pass
+        """
+        Remove merged task branches.
+        :param args:
+        :return:
+        """
+        for branch in self.repo.git.branch('--merged').splitlines():
+            branch = branch.strip()
+            if '*' == branch[0] or not self.is_task(branch):
+                continue
+            if args.dry_run:
+                print('Would remove {}.'.format(branch))
+            else:
+                print('Removing branch {}.'.format(branch))
+                self.repo.git.branch('-d', branch)
 
     def start(self, args):
 

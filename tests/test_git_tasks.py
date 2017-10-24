@@ -101,6 +101,74 @@ systems:
             output = self.run_program(['status'], env)
             self.assertEqual(output, 'generic-1 (New): First issue\n')
 
+    def test_clean(self):
+        """Test creating and switching branches"""
+        env = os.environ.copy()
+        env['GIT_TASKS_CONFIG_FILE'] = self.config_file
+
+        output = self.run_program(['list'], env)
+        self.assertEqual(output, '')
+        t1 = 'issue-1'
+        t2 = 'issue-2'
+
+        self.repo.git.commit('--allow-empty', '-m', 'Initial')
+        self.repo.git.branch('origin/master')
+
+        # Create first task
+        self.run_program(['start', t1], env)
+        self.repo.git.commit('--allow-empty', '-m', 't1')
+
+        # Create second task
+        self.run_program(['start', t2], env)
+        self.repo.git.commit('--allow-empty', '-m', 't2')
+
+        branches = sorted([h.name for h in self.repo.heads])
+        self.assertListEqual(branches, sorted(['master', 'origin/master',
+                                               t1, t2]))
+
+        self.repo.git.checkout('origin/master')
+
+        # Run clean where all branches should be preserved
+        output = self.run_program(['clean'], env)
+        self.assertEqual('', output)
+
+        branches = sorted([h.name for h in self.repo.heads])
+        self.assertListEqual(branches, sorted(['master', 'origin/master',
+                                               t1, t2]))
+
+        # Move origin/master to t2
+        self.repo.git.reset('--hard', t2)
+
+        # Clean t2
+        output = self.run_program(['clean'], env)
+        self.assertIn(t2, output)
+
+        branches = sorted([h.name for h in self.repo.heads])
+        self.assertListEqual(branches, sorted(['master', 'origin/master',
+                                               t1]))
+
+        self.repo.git.checkout(t1)
+        self.repo.git.rebase()
+
+        self.repo.git.checkout('origin/master')
+
+        # Move origin/master to t1
+        self.repo.git.reset('--hard', t1)
+
+        # Dry run t1
+        output = self.run_program(['clean', '--dry-run'], env)
+        self.assertIn(t1, output)
+        branches = sorted([h.name for h in self.repo.heads])
+        self.assertListEqual(branches, sorted(['master', 'origin/master',
+                                               t1]))
+
+        # Clean t1
+        output = self.run_program(['clean'], env)
+        self.assertIn(t1, output)
+
+        branches = sorted([h.name for h in self.repo.heads])
+        self.assertListEqual(branches, sorted(['master', 'origin/master']))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -55,6 +55,16 @@ This will consider branches matching the regular expression ``task-[0-9]+$``
 to be task branches. In this case the information and the functionality will
 be limited, since there is no backend to provide meta-data about tasks.
 
+``git-tasks`` will look for the configuration file in the following order:
+
+* command-line option ``--config-file``
+* environment variable ``GIT_TASKS_CONFIG_FILE``
+* ``~/.git-tasks/config.yml``
+
+The program will not complain if a configuration file cannot be found using
+any of the alternatives above, it will simply not recognize *any* task
+branches since there are no systems to match branches against.
+
 A more complete example::
 
     systems:
@@ -174,6 +184,20 @@ Example::
     jira-56 (New): Intermittent alarm in HAL
     task-b5 (Closed): refactory boyance.c
     task-a78 (Waiting for verification): Write User Guide
+
+Clean merged tasks
+==================
+
+Running::
+
+    git clean --dry-run
+
+will should which task branches are part of the current history and can be
+deleted, and::
+
+    git clean
+
+will delete those branches.
 
 References
 ==========
