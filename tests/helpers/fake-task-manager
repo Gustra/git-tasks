@@ -13,6 +13,8 @@ case $1 in
 
   get-task) echo "${FAKE_TASK-}"; exit ${FAKE_STATUS:-0};;
 
+  set-assignee) exit 0;;
+
   *)
     echo "Error: unknown command $1"
     exit 1;;

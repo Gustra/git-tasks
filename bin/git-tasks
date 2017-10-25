@@ -30,6 +30,11 @@ DESCRIPTION
 
     Print a line suitable to add to a commit message
 
+  grab <name>
+
+    First do "start <name" and then add the user in the credentials to the
+    task assignees, if the backend supports it
+
   list
 
     List all branches recognized as task branches in this repository
@@ -207,6 +212,11 @@ class Backend(object):
         :param config: backend-specific configuration dict
         """
         self.config = config
+        try:
+            self.name = config['name']
+        except KeyError:
+            self.name = config['type']
+
         if 'patterns' in config and config['patterns']:
             self.patterns = config['patterns']
         else:
@@ -279,6 +289,14 @@ class Backend(object):
                 return True
         return False
 
+    def assign_task(self, name):
+        """
+        Adds assignee to the task using the system's configured credentials
+        :param name: name of the task branch
+        :return: None if this system does not support task assigning
+        """
+        return None
+
 
 class Github(Backend):
     def __init__(self, **config):
@@ -297,10 +315,12 @@ class Github(Backend):
                 self.credentials = yaml.load(fp)
                 self.github = github.Github(self.credentials['user'],
                                             self.credentials['password'])
+                del self.credentials['password']
                 self.repository = \
                     self.github.get_repo(config['our']['repository'])
         except KeyError:
             pass
+
 
     def get_task(self, name):
         """
@@ -330,6 +350,25 @@ class Github(Backend):
             }
 
         return GithubTask(name, self, task_data)
+
+    def assign_task(self, name):
+        """
+        Assign the task using the configured credentials
+        :param name: task branch
+        :return:
+        """
+        if not self.is_issue(name):
+            raise NoSuchTaskError('{} did not match the'
+                                  ' task pattern'.format(name))
+        if not self.repository:
+            return None
+
+        issue_id = int(name.split('-')[1])
+        logging.debug('Assigning issue %d to %s', issue_id,
+                      self.credentials['user'])
+        github_task = self.repository.get_issue(issue_id)
+        github_task.add_to_assignees(self.credentials['user'])
+        return True
 
 
 class Generic(Backend):
@@ -442,6 +481,11 @@ class Gittasks(object):
         sp.add_argument('id', help='Task id, e.g. JIRA-1234, tuleap-52')
         sp.set_defaults(func=self.start)
 
+        sp = subparsers.add_parser('grab',
+                                   help='Create or switch, and assign task')
+        sp.add_argument('id', help='Task id, e.g. JIRA-1234, tuleap-52')
+        sp.set_defaults(func=self.grab)
+
         sp = subparsers.add_parser('status',
                                    help='List status for tasks')
         sp.add_argument('--current',
@@ -478,6 +522,18 @@ class Gittasks(object):
         if not os.path.exists(dest):
             print('Installing missing commit message hook.')
             shutil.copy(src, dest)
+
+    def get_system_from_name(self, name):
+        """
+        Return the task system, if there is a match
+        :return: Backend object or None
+        """
+        # TODO handle multiple matches
+
+        for system in self.config.systems:
+            if system.is_issue(name):
+                return system
+        return None
 
     def is_task(self, name):
         """
@@ -528,6 +584,16 @@ class Gittasks(object):
                     'Not setting upstream {} since it does not exist'.format(
                         upstream))
                 self.repo.git.checkout('-b', args.id)
+
+    def grab(self, args):
+        self.start(args)
+        system = self.get_system_from_name(args.id)
+        if not system:
+            return
+        if system.assign_task(args.id) is None:
+            print('{} does not support assigning tasks.'.format(system.name))
+            return
+        print('Task grabbed.')
 
     def list(self, args):
         """

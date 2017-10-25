@@ -163,6 +163,10 @@ which may fail if there are uncommitted changes.
 The ``prepare-commit-msg`` hook will be installed into the ``.git/hooks``
 directory if it is absent.
 
+The ``grab`` command can be used instead of ``start`` to also add the user
+configured for the system to the list of task assignees, if the backend
+supports task assigning.
+
 Listing current tasks
 =====================
 
